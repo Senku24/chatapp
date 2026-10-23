@@ -1,29 +1,65 @@
-import { WebSocketServer, WebSocket } from "ws" ;
+import { WebSocket, WebSocketServer } from "ws";
 
-const wss = new WebSocketServer({ port: 8080 });
+const port = Number(process.env.PORT ?? 8080);
+const wss = new WebSocketServer({ port });
 interface User {
     socket: WebSocket;
     room: string;
 }
-let allSockets : User[] = [];
+const allSockets: User[] = [];
 
 
-wss.on("connection",  (socket) => {
+wss.on("connection", (socket) => {
 
-    console.log(`New client connected. Total clients: ${allSockets.length}`);
+    console.log(`New client connected.`);
 
     socket.on("message", (message) => {
-        const parsedMessage = JSON.parse(message.toString());
-        if(parsedMessage.type === "join") {
-            allSockets.push({ socket, room: parsedMessage.payload.roomId });
-        }
-        if(parsedMessage.type === "chat") {
-            const currentUserRoom =  find((x) => x.socket === socket)?.room;
+        try {
+            const parsedMessage: {
+                type?: string;
+                payload?: { roomId?: unknown; message?: unknown };
+            } = JSON.parse(message.toString());
+
+            if (parsedMessage.type === "join") {
+                const roomId = parsedMessage.payload?.roomId;
+                if (typeof roomId !== "string" || roomId.length === 0) {
+                    socket.send(JSON.stringify({ type: "error", message: "A roomId is required." }));
+                    return;
+                }
+
+                const existingUser = allSockets.find((user) => user.socket === socket);
+                if (existingUser) {
+                    existingUser.room = roomId;
+                } else {
+                    allSockets.push({ socket, room: roomId });
+                }
+                return;
+            }
+
+            if (parsedMessage.type === "chat") {
+                const currentUser = allSockets.find((user) => user.socket === socket);
+                const chatMessage = parsedMessage.payload?.message;
+
+                if (!currentUser || typeof chatMessage !== "string") {
+                    return;
+                }
+
+                for (const user of allSockets) {
+                    if (user.room === currentUser.room && user.socket.readyState === WebSocket.OPEN) {
+                        user.socket.send(chatMessage);
+                    }
+                }
+            }
+        } catch {
+            socket.send(JSON.stringify({ type: "error", message: "Invalid message format." }));
         }
     });
 
-    socket.on("disconnect", () => {
+    socket.on("close", () => {
         console.log(`Client disconnected. Total clients: ${allSockets.length}`);
-        allSockets = allSockets.filter((s) => s.socket !== socket);
+        const index = allSockets.findIndex((user) => user.socket === socket);
+        if (index !== -1) {
+            allSockets.splice(index, 1);
+        }
     });
-})
+});
